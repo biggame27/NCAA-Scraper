@@ -7,6 +7,7 @@ from typing import Dict, List, Set
 from pathlib import Path
 
 from .config import get_config, Division, Gender
+from .config.constants import ErrorType
 from .scrapers import NCAAScraper
 from .scrapers.selenium_utils import SeleniumUtils
 from .utils import format_date_for_url, generate_ncaa_urls, parse_url_components
@@ -128,6 +129,17 @@ def discover_games(
     logger.info(f"Discovery complete: {total_games} unique games found")
     logger.info(f"  - {duplicate_games} games appear in multiple divisions")
     logger.info(f"  - {total_games - duplicate_games} games are unique to one division")
+    
+    # Send Discord notification if no game links found
+    if total_games == 0:
+        date_str = target_date.strftime('%Y-%m-%d')
+        message = f"⚠️ No game links found during discovery for {date_str}. This may indicate the site is loading slowly or there are no games scheduled."
+        scraper.send_notification(
+            message,
+            ErrorType.WARNING,
+            date=date_str
+        )
+        logger.warning(f"Sent Discord notification: No game links found for {date_str}")
     
     # Create final mapping structure
     result = {
