@@ -12,6 +12,7 @@ from .utils import get_yesterday, format_date_for_url, generate_ncaa_urls
 from .models import ScrapingConfig, DateRange
 from .config.constants import ErrorType
 from .discovery import discover_games, load_game_links_mapping, get_games_for_division_gender
+from .failed_games import save_failed_game, load_failed_games, get_failed_games_for_division_gender, mark_game_as_retried
 import time
 import json
 
@@ -40,6 +41,8 @@ def main():
     parser.add_argument('--test-game-date', type=str, help='Date for test game in YYYY/MM/DD format (required if using --test-game with contest ID only)')
     parser.add_argument('--test-game-division', type=str, choices=['d1', 'd2', 'd3'], default='d1', help='Division for test game (default: d1)')
     parser.add_argument('--test-game-gender', type=str, choices=['men', 'women'], default='men', help='Gender for test game (default: men)')
+    parser.add_argument('--retry-failed', action='store_true', help='Retry scraping failed games from previous runs')
+    parser.add_argument('--failed-games-file', type=str, default='failed_games.json', help='Path to failed games JSON file')
     
     args = parser.parse_args()
     
@@ -149,6 +152,61 @@ def main():
             logger.error(f"Discovery failed: {e}")
             return 1
     
+    # Handle retry failed games mode
+    if args.retry_failed:
+        target_date = _parse_date(args.date) if args.date else get_yesterday()
+        logger.info(f"Retry mode: retrying failed games for {target_date}")
+        
+        try:
+            failed_games = load_failed_games(args.failed_games_file, target_date)
+            date_key = target_date.isoformat()
+            
+            if date_key not in failed_games or not failed_games[date_key]:
+                logger.info(f"No failed games found for {target_date}")
+                return 0
+            
+            logger.info(f"Found {sum(len(entries) for entries in failed_games[date_key].values())} failed game entries to retry")
+            
+            # Initialize scraper
+            scraper = NCAAScraper(config)
+            scraper.force_rescrape = args.force_rescrape
+            
+            # Retry games for each division/gender combination
+            all_divisions = ['d1', 'd2', 'd3']
+            all_genders = ['men', 'women']
+            
+            total_retried = 0
+            total_successful = 0
+            
+            for division in all_divisions:
+                for gender in all_genders:
+                    game_links = get_failed_games_for_division_gender(failed_games, target_date, division, gender)
+                    
+                    if not game_links:
+                        continue
+                    
+                    logger.info(f"Retrying {len(game_links)} failed games for {division} {gender}")
+                    
+                    _scrape_games_from_mapping(
+                        scraper,
+                        game_links,
+                        target_date,
+                        division,
+                        gender,
+                        config.output_dir,
+                        failed_games_file=args.failed_games_file,
+                        is_retry=True
+                    )
+                    
+                    total_retried += len(game_links)
+            
+            logger.info(f"Retry completed: {total_retried} games retried")
+            return 0
+            
+        except Exception as e:
+            logger.error(f"Error in retry mode: {e}")
+            return 1
+    
     # Handle single division/gender scraping (requires mapping file)
     if args.single_division and args.single_gender:
         if not args.mapping_file:
@@ -180,7 +238,9 @@ def main():
                 target_date,
                 args.single_division,
                 args.single_gender,
-                config.output_dir
+                config.output_dir,
+                failed_games_file=args.failed_games_file,
+                is_retry=False
             )
             
             logger.info("Scraping completed!")
@@ -305,7 +365,9 @@ def _scrape_games_from_mapping(
     target_date: date,
     division: str,
     gender: str,
-    output_dir: str
+    output_dir: str,
+    failed_games_file: str = None,
+    is_retry: bool = False
 ):
     """Scrape games from a list of game links (used in single division/gender mode)."""
     from .utils import format_date_for_url
@@ -329,6 +391,8 @@ def _scrape_games_from_mapping(
     
     try:
         scraped_count = 0
+        failed_count = 0
+        
         for idx, game_link in enumerate(game_links, 1):
             try:
                 logger.info(f"Scraping game {idx}/{len(game_links)}: {game_link}")
@@ -358,6 +422,11 @@ def _scrape_games_from_mapping(
                         if scraper.csv_handler.append_game_data(csv_path, existing_data):
                             logger.info(f"Copied duplicate game data from {primary_division}")
                             scraped_count += 1
+                            
+                            # Mark as successful if retrying
+                            if is_retry and failed_games_file:
+                                mark_game_as_retried(failed_games_file, game_link, target_date, division, gender, success=True)
+                            
                             continue
                         else:
                             logger.warning(f"Failed to copy, will scrape instead")
@@ -373,6 +442,29 @@ def _scrape_games_from_mapping(
                 
                 if game_data:
                     scraped_count += 1
+                    
+                    # Mark as successful if retrying
+                    if is_retry and failed_games_file:
+                        mark_game_as_retried(failed_games_file, game_link, target_date, division, gender, success=True)
+                else:
+                    failed_count += 1
+                    
+                    # Track failed game
+                    if failed_games_file:
+                        error_type = "timeout"  # Could be more specific based on error
+                        save_failed_game(
+                            failed_games_file,
+                            game_link,
+                            target_date,
+                            division,
+                            gender,
+                            error_type=error_type,
+                            error_message="Game failed to scrape"
+                        )
+                    
+                    # Mark as failed if retrying
+                    if is_retry and failed_games_file:
+                        mark_game_as_retried(failed_games_file, game_link, target_date, division, gender, success=False)
                 
                 # Recreate driver every 20 games
                 if idx > 0 and idx % 20 == 0:
@@ -388,9 +480,28 @@ def _scrape_games_from_mapping(
                 
             except Exception as e:
                 logger.error(f"Error scraping game {game_link}: {e}")
+                failed_count += 1
+                
+                # Track failed game
+                if failed_games_file:
+                    error_type = "exception"
+                    save_failed_game(
+                        failed_games_file,
+                        game_link,
+                        target_date,
+                        division,
+                        gender,
+                        error_type=error_type,
+                        error_message=str(e)
+                    )
+                
+                # Mark as failed if retrying
+                if is_retry and failed_games_file:
+                    mark_game_as_retried(failed_games_file, game_link, target_date, division, gender, success=False)
+                
                 continue
         
-        logger.info(f"Scraped {scraped_count}/{len(game_links)} games successfully")
+        logger.info(f"Scraped {scraped_count}/{len(game_links)} games successfully ({failed_count} failed)")
         
         # Upload to Google Drive if enabled
         if scraper.config.upload_to_gdrive and scraper.file_manager.file_exists_and_has_content(csv_path):
