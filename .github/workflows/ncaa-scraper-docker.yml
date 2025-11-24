@@ -63,7 +63,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30  # Discovery should be fast
     needs: check-schedule-time
-    if: ${{ !github.event.inputs.retry_only && (github.event_name != 'schedule' || needs.check-schedule-time.outputs.is_morning_run == 'true') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.retry_only != 'true') || (github.event_name == 'schedule' && needs.check-schedule-time.outputs.is_morning_run == 'true') }}
     
     steps:
     - name: Checkout code
@@ -153,7 +153,7 @@ jobs:
     needs: [discover-games, check-schedule-time]
     runs-on: ubuntu-latest
     timeout-minutes: 120  # Each job should be much shorter now
-    if: ${{ !github.event.inputs.retry_only && (github.event_name != 'schedule' || needs.check-schedule-time.outputs.is_morning_run == 'true') }}
+    if: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.retry_only != 'true') || (github.event_name == 'schedule' && needs.check-schedule-time.outputs.is_morning_run == 'true') }}
     strategy:
       matrix:
         include:
@@ -296,7 +296,7 @@ jobs:
     needs: [scrape, check-schedule-time]
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: always() && !github.event.inputs.retry_only && (github.event_name != 'schedule' || needs.check-schedule-time.outputs.is_morning_run == 'true')  # Run even if scrape jobs fail, but not in retry-only mode or afternoon schedule
+    if: always() && ((github.event_name == 'workflow_dispatch' && github.event.inputs.retry_only != 'true') || (github.event_name == 'schedule' && needs.check-schedule-time.outputs.is_morning_run == 'true'))  # Run even if scrape jobs fail, but not in retry-only mode or afternoon schedule
     
     steps:
     - name: Checkout code
