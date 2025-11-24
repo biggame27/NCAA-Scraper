@@ -1,11 +1,9 @@
 name: NCAA Basketball Scraper (Docker)
 
 on:
-  # Run discovery and D1 at 4 AM CT (10 AM UTC)
+  # Run daily at 6 AM UTC (adjust timezone as needed)
   schedule:
-    - cron: '0 10 * * *'  # D1 men and women
-    - cron: '0 14 * * *'  # D2 men and women (8 AM CT = 2 PM UTC)
-    - cron: '0 18 * * *'  # D3 men and women (12 PM CT = 6 PM UTC)
+    - cron: '0 10 * * *'
   
   # Allow manual triggering
   workflow_dispatch:
@@ -19,16 +17,6 @@ on:
         required: false
         default: false
         type: boolean
-      division:
-        description: 'Division to scrape (d1, d2, d3, or all)'
-        required: false
-        default: 'all'
-        type: choice
-        options:
-          - all
-          - d1
-          - d2
-          - d3
 
 env:
   PYTHONUNBUFFERED: 1
@@ -130,51 +118,25 @@ jobs:
         rm -f credentials.json .env token.pickle
         docker container prune -f
 
-  # Determine which division to run based on schedule time
-  determine-division:
+  scrape:
     needs: discover-games
     runs-on: ubuntu-latest
-    outputs:
-      division: ${{ steps.set-division.outputs.division }}
-    steps:
-      - name: Set division based on schedule time
-        id: set-division
-        run: |
-          # Check if manual trigger with specific division
-          if [ -n "${{ github.event.inputs.division }}" ] && [ "${{ github.event.inputs.division }}" != "all" ]; then
-            echo "division=${{ github.event.inputs.division }}" >> $GITHUB_OUTPUT
-            echo "Selected division from manual input: ${{ github.event.inputs.division }}"
-            exit 0
-          fi
-          
-          # Get current UTC hour (when workflow was triggered)
-          HOUR=$(date -u +%H)
-          echo "Current UTC hour: $HOUR"
-          
-          # 10 = 4AM CT (D1), 14 = 8AM CT (D2), 18 = 12PM CT (D3)
-          if [ "$HOUR" -eq "10" ]; then
-            echo "division=d1" >> $GITHUB_OUTPUT
-            echo "Selected division: d1 (4AM CT schedule)"
-          elif [ "$HOUR" -eq "14" ]; then
-            echo "division=d2" >> $GITHUB_OUTPUT
-            echo "Selected division: d2 (8AM CT schedule)"
-          elif [ "$HOUR" -eq "18" ]; then
-            echo "division=d3" >> $GITHUB_OUTPUT
-            echo "Selected division: d3 (12PM CT schedule)"
-          else
-            # Default to d1 for manual runs without division specified
-            echo "division=d1" >> $GITHUB_OUTPUT
-            echo "Selected division: d1 (default for manual run)"
-          fi
-
-  scrape-d1:
-    needs: [discover-games, determine-division]
-    if: needs.determine-division.outputs.division == 'd1' || (github.event.inputs.division == 'all' && github.event_name == 'workflow_dispatch') || (github.event.inputs.division == 'd1' && github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 120  # Each job should be much shorter now
     strategy:
       matrix:
-        gender: [men, women]
+        include:
+          - division: d1
+            gender: men
+          - division: d1
+            gender: women
+          - division: d2
+            gender: men
+          - division: d2
+            gender: women
+          - division: d3
+            gender: men
+          - division: d3
+            gender: women
     
     steps:
     - name: Checkout code
@@ -225,7 +187,7 @@ jobs:
         mkdir -p data logs
         chmod 777 data logs
         
-    - name: Run Scraper for D1 ${{ matrix.gender }}
+    - name: Run Scraper for ${{ matrix.division }} ${{ matrix.gender }}
       run: |
         DATE_ARG=""
         if [ -n "${{ github.event.inputs.date }}" ]; then
@@ -238,7 +200,7 @@ jobs:
         fi
         
         docker run --rm \
-          --name ncaa-scraper-d1-${{ matrix.gender }} \
+          --name ncaa-scraper-${{ matrix.division }}-${{ matrix.gender }} \
           --shm-size=2gb \
           --memory=4g \
           --memory-swap=4g \
@@ -257,7 +219,7 @@ jobs:
           -e WDM_LOCAL=1 \
           -e UPLOAD_TO_GDRIVE=true \
           ncaa-scraper:latest \
-          --single-division d1 \
+          --single-division ${{ matrix.division }} \
           --single-gender ${{ matrix.gender }} \
           --mapping-file /app/discovery/game_links_mapping.json \
           $DATE_ARG \
@@ -267,7 +229,7 @@ jobs:
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: scraped-data-d1-${{ matrix.gender }}-${{ github.run_number }}
+        name: scraped-data-${{ matrix.division }}-${{ matrix.gender }}-${{ github.run_number }}
         path: data/
         retention-days: 30
         
@@ -275,243 +237,7 @@ jobs:
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: logs-d1-${{ matrix.gender }}-${{ github.run_number }}
-        path: logs/
-        retention-days: 7
-        
-    - name: Cleanup
-      if: always()
-      run: |
-        rm -f credentials.json .env token.pickle
-        docker container prune -f
-
-  scrape-d2:
-    needs: [discover-games, determine-division]
-    if: needs.determine-division.outputs.division == 'd2' || (github.event.inputs.division == 'all' && github.event_name == 'workflow_dispatch') || (github.event.inputs.division == 'd2' && github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    strategy:
-      matrix:
-        gender: [men, women]
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      
-    - name: Build Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: false
-        tags: ncaa-scraper:latest
-        load: true
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        
-    - name: Download discovery mapping
-      uses: actions/download-artifact@v4
-      with:
-        name: game-links-mapping
-        path: discovery/
-        
-    - name: Provide OAuth token
-      shell: bash
-      run: |
-        if [ -n "${{ secrets.GOOGLE_TOKEN_FILE_B64 }}" ]; then
-          printf '%s' '${{ secrets.GOOGLE_TOKEN_FILE_B64 }}' | base64 -d > token.pickle
-        else
-          echo "GOOGLE_TOKEN_FILE_B64 secret is missing" >&2; exit 1
-        fi
-
-        cat > .env << EOF
-        GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
-        GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
-        GOOGLE_REDIRECT_URI=${{ secrets.GOOGLE_REDIRECT_URI }}
-        GOOGLE_DRIVE_FOLDER_ID=${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
-        DISCORD_WEBHOOK_URL=${{ secrets.DISCORD_WEBHOOK_URL }}
-        OUTPUT_DIR=/app/data
-        LOG_LEVEL=INFO
-        UPLOAD_TO_GDRIVE=true
-        GOOGLE_TOKEN_FILE=/app/token.pickle
-        EOF
-        
-    - name: Create directories
-      run: |
-        mkdir -p data logs
-        chmod 777 data logs
-        
-    - name: Run Scraper for D2 ${{ matrix.gender }}
-      run: |
-        DATE_ARG=""
-        if [ -n "${{ github.event.inputs.date }}" ]; then
-          DATE_ARG="--date ${{ github.event.inputs.date }}"
-        fi
-        
-        FORCE_ARG=""
-        if [ "${{ github.event.inputs.force_rescrape }}" = "true" ]; then
-          FORCE_ARG="--force-rescrape"
-        fi
-        
-        docker run --rm \
-          --name ncaa-scraper-d2-${{ matrix.gender }} \
-          --shm-size=2gb \
-          --memory=4g \
-          --memory-swap=4g \
-          -v $(pwd)/data:/app/data \
-          -v $(pwd)/logs:/app/logs \
-          -v $(pwd)/discovery:/app/discovery \
-          -v $(pwd)/.env:/app/.env \
-          -v $(pwd)/token.pickle:/app/token.pickle \
-          -e PYTHONUNBUFFERED=1 \
-          -e OUTPUT_DIR=/app/data \
-          -e DISPLAY=:99 \
-          -e CHROME_BIN=/usr/bin/google-chrome \
-          -e CHROME_PATH=/usr/bin/google-chrome \
-          -e DOCKER_CONTAINER=true \
-          -e WDM_LOG_LEVEL=0 \
-          -e WDM_LOCAL=1 \
-          -e UPLOAD_TO_GDRIVE=true \
-          ncaa-scraper:latest \
-          --single-division d2 \
-          --single-gender ${{ matrix.gender }} \
-          --mapping-file /app/discovery/game_links_mapping.json \
-          $DATE_ARG \
-          $FORCE_ARG
-        
-    - name: Upload scraped data
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: scraped-data-d2-${{ matrix.gender }}-${{ github.run_number }}
-        path: data/
-        retention-days: 30
-        
-    - name: Upload logs
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: logs-d2-${{ matrix.gender }}-${{ github.run_number }}
-        path: logs/
-        retention-days: 7
-        
-    - name: Cleanup
-      if: always()
-      run: |
-        rm -f credentials.json .env token.pickle
-        docker container prune -f
-
-  scrape-d3:
-    needs: [discover-games, determine-division]
-    if: needs.determine-division.outputs.division == 'd3' || (github.event.inputs.division == 'all' && github.event_name == 'workflow_dispatch') || (github.event.inputs.division == 'd3' && github.event_name == 'workflow_dispatch')
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    strategy:
-      matrix:
-        gender: [men, women]
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-      
-    - name: Build Docker image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        push: false
-        tags: ncaa-scraper:latest
-        load: true
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        
-    - name: Download discovery mapping
-      uses: actions/download-artifact@v4
-      with:
-        name: game-links-mapping
-        path: discovery/
-        
-    - name: Provide OAuth token
-      shell: bash
-      run: |
-        if [ -n "${{ secrets.GOOGLE_TOKEN_FILE_B64 }}" ]; then
-          printf '%s' '${{ secrets.GOOGLE_TOKEN_FILE_B64 }}' | base64 -d > token.pickle
-        else
-          echo "GOOGLE_TOKEN_FILE_B64 secret is missing" >&2; exit 1
-        fi
-
-        cat > .env << EOF
-        GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
-        GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
-        GOOGLE_REDIRECT_URI=${{ secrets.GOOGLE_REDIRECT_URI }}
-        GOOGLE_DRIVE_FOLDER_ID=${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
-        DISCORD_WEBHOOK_URL=${{ secrets.DISCORD_WEBHOOK_URL }}
-        OUTPUT_DIR=/app/data
-        LOG_LEVEL=INFO
-        UPLOAD_TO_GDRIVE=true
-        GOOGLE_TOKEN_FILE=/app/token.pickle
-        EOF
-        
-    - name: Create directories
-      run: |
-        mkdir -p data logs
-        chmod 777 data logs
-        
-    - name: Run Scraper for D3 ${{ matrix.gender }}
-      run: |
-        DATE_ARG=""
-        if [ -n "${{ github.event.inputs.date }}" ]; then
-          DATE_ARG="--date ${{ github.event.inputs.date }}"
-        fi
-        
-        FORCE_ARG=""
-        if [ "${{ github.event.inputs.force_rescrape }}" = "true" ]; then
-          FORCE_ARG="--force-rescrape"
-        fi
-        
-        docker run --rm \
-          --name ncaa-scraper-d3-${{ matrix.gender }} \
-          --shm-size=2gb \
-          --memory=4g \
-          --memory-swap=4g \
-          -v $(pwd)/data:/app/data \
-          -v $(pwd)/logs:/app/logs \
-          -v $(pwd)/discovery:/app/discovery \
-          -v $(pwd)/.env:/app/.env \
-          -v $(pwd)/token.pickle:/app/token.pickle \
-          -e PYTHONUNBUFFERED=1 \
-          -e OUTPUT_DIR=/app/data \
-          -e DISPLAY=:99 \
-          -e CHROME_BIN=/usr/bin/google-chrome \
-          -e CHROME_PATH=/usr/bin/google-chrome \
-          -e DOCKER_CONTAINER=true \
-          -e WDM_LOG_LEVEL=0 \
-          -e WDM_LOCAL=1 \
-          -e UPLOAD_TO_GDRIVE=true \
-          ncaa-scraper:latest \
-          --single-division d3 \
-          --single-gender ${{ matrix.gender }} \
-          --mapping-file /app/discovery/game_links_mapping.json \
-          $DATE_ARG \
-          $FORCE_ARG
-        
-    - name: Upload scraped data
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: scraped-data-d3-${{ matrix.gender }}-${{ github.run_number }}
-        path: data/
-        retention-days: 30
-        
-    - name: Upload logs
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: logs-d3-${{ matrix.gender }}-${{ github.run_number }}
+        name: logs-${{ matrix.division }}-${{ matrix.gender }}-${{ github.run_number }}
         path: logs/
         retention-days: 7
         
