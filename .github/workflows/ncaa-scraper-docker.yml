@@ -556,16 +556,29 @@ jobs:
                 headers: headers,
                 followRedirect: false  // Handle redirects manually
               }, (response) => {
-                // Handle redirects (302)
+                // Handle redirects (302) - look for Location header as per GitHub API docs
                 if (response.statusCode === 302 || response.statusCode === 301) {
-                  const redirectUrl = response.headers.location;
+                  // Node.js normalizes headers to lowercase
+                  const redirectUrl = response.headers.location || response.headers.Location;
+                  
+                  if (!redirectUrl) {
+                    file.close();
+                    fs.unlinkSync(dest);
+                    return reject(new Error('No Location header in redirect response'));
+                  }
+                  
+                  // Consume the response body to allow connection to close
+                  response.resume();
+                  
                   file.close();
                   fs.unlinkSync(dest);
-                  // Follow redirect without auth header
+                  // Follow redirect without auth header (redirect URL is signed and expires in 1 minute)
                   return downloadFile(redirectUrl, dest, token, true).then(resolve).catch(reject);
                 }
                 
                 if (response.statusCode !== 200) {
+                  // Consume response body on error
+                  response.resume();
                   file.close();
                   fs.unlinkSync(dest);
                   return reject(new Error(`Failed to download: ${response.statusCode}`));
