@@ -534,8 +534,9 @@ class GoogleDriveManager:
                 logger.warning(f"Could not find/create folder structure for {year}/{month}/{gender}/{division}")
                 return False
             
-            # Find the file
-            file_name = os.path.basename(local_path)
+            # Find the file - construct filename from parameters to match Google Drive naming convention
+            # (local_path may have .existing suffix which doesn't exist in Google Drive)
+            file_name = f"basketball_{gender}_{division}_{year}_{month}_{day}.csv"
             file_id = self.file_exists(file_name, folder_id)
             
             if not file_id:
