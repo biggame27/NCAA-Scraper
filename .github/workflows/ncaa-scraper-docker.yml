@@ -489,7 +489,6 @@ jobs:
           const fs = require('fs');
           const path = require('path');
           const https = require('https');
-          const https = require('https');
           
           // Get workflow runs
           const runs = await github.rest.actions.listWorkflowRuns({
