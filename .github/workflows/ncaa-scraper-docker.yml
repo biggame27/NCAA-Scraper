@@ -17,6 +17,11 @@ on:
         required: false
         default: false
         type: boolean
+      retry_only:
+        description: 'Only run retry job for failed games (skip discovery and scrape)'
+        required: false
+        default: false
+        type: boolean
 
 env:
   PYTHONUNBUFFERED: 1
@@ -33,6 +38,7 @@ jobs:
   discover-games:
     runs-on: ubuntu-latest
     timeout-minutes: 30  # Discovery should be fast
+    if: ${{ !github.event.inputs.retry_only }}
     
     steps:
     - name: Checkout code
@@ -122,6 +128,7 @@ jobs:
     needs: discover-games
     runs-on: ubuntu-latest
     timeout-minutes: 120  # Each job should be much shorter now
+    if: ${{ !github.event.inputs.retry_only }}
     strategy:
       matrix:
         include:
@@ -264,7 +271,7 @@ jobs:
     needs: scrape
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: always()  # Run even if scrape jobs fail
+    if: always() && !github.event.inputs.retry_only  # Run even if scrape jobs fail, but not in retry-only mode
     
     steps:
     - name: Checkout code
@@ -415,6 +422,175 @@ jobs:
       if: always()
       with:
         name: retry-logs-${{ github.run_number }}
+        path: logs/
+        retention-days: 7
+        if-no-files-found: ignore
+        
+    - name: Cleanup
+      if: always()
+      run: |
+        rm -f credentials.json .env token.pickle
+        docker container prune -f
+
+  retry-only:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    if: github.event.inputs.retry_only == 'true'  # Only run when retry_only is enabled
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Build Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: false
+        tags: ncaa-scraper:latest
+        load: true
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Download failed games artifacts from previous runs
+      uses: actions/download-artifact@v4
+      continue-on-error: true
+      with:
+        pattern: failed-games-*
+        merge-multiple: true
+        path: ./
+        
+    - name: Merge failed games files
+      shell: bash
+      run: |
+        # Merge all failed games JSON files into one
+        python3 << 'EOF'
+        import json
+        import glob
+        from pathlib import Path
+        
+        merged = {}
+        failed_files = glob.glob("failed-games-*/failed_games.json")
+        
+        if not failed_files:
+            print("No failed games files found from artifacts")
+            # Try to load from a previous workflow run's artifact
+            # For now, create empty file - user can manually upload failed_games.json if needed
+            Path("failed_games.json").touch()
+            print("Created empty failed_games.json - if you have a failed_games.json file, upload it as an artifact first")
+            exit(0)
+        
+        print(f"Found {len(failed_files)} failed games files to merge")
+        
+        for file_path in failed_files:
+            try:
+                with open(file_path, 'r') as f:
+                    data = json.load(f)
+                    # Merge by date
+                    for date_key, games in data.items():
+                        if date_key not in merged:
+                            merged[date_key] = {}
+                        # Merge games, avoiding duplicates
+                        for game_link, entries in games.items():
+                            if game_link not in merged[date_key]:
+                                merged[date_key][game_link] = []
+                            # Add entries that don't already exist
+                            existing_combos = {(e['division'], e['gender']) for e in merged[date_key][game_link]}
+                            for entry in entries:
+                                combo = (entry['division'], entry['gender'])
+                                if combo not in existing_combos:
+                                    merged[date_key][game_link].append(entry)
+            except Exception as e:
+                print(f"Error processing {file_path}: {e}")
+                continue
+        
+        # Write merged file
+        with open("failed_games.json", 'w') as f:
+            json.dump(merged, f, indent=2)
+        
+        total_failed = sum(len(entries) for games in merged.values() for entries in games.values())
+        print(f"Merged {total_failed} failed game entries into failed_games.json")
+        EOF
+        
+    - name: Provide OAuth token
+      shell: bash
+      run: |
+        if [ -n "${{ secrets.GOOGLE_TOKEN_FILE_B64 }}" ]; then
+          printf '%s' '${{ secrets.GOOGLE_TOKEN_FILE_B64 }}' | base64 -d > token.pickle
+        else
+          echo "GOOGLE_TOKEN_FILE_B64 secret is missing" >&2; exit 1
+        fi
+
+        cat > .env << EOF
+        GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+        GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+        GOOGLE_REDIRECT_URI=${{ secrets.GOOGLE_REDIRECT_URI }}
+        GOOGLE_DRIVE_FOLDER_ID=${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+        DISCORD_WEBHOOK_URL=${{ secrets.DISCORD_WEBHOOK_URL }}
+        OUTPUT_DIR=/app/data
+        LOG_LEVEL=INFO
+        UPLOAD_TO_GDRIVE=true
+        GOOGLE_TOKEN_FILE=/app/token.pickle
+        EOF
+        
+    - name: Create directories
+      run: |
+        mkdir -p data logs
+        chmod 777 data logs
+        
+    - name: Retry failed games
+      run: |
+        DATE_ARG=""
+        if [ -n "${{ github.event.inputs.date }}" ]; then
+          DATE_ARG="--date ${{ github.event.inputs.date }}"
+        fi
+        
+        FORCE_ARG=""
+        if [ "${{ github.event.inputs.force_rescrape }}" = "true" ]; then
+          FORCE_ARG="--force-rescrape"
+        fi
+        
+        # Check if failed games file exists and has content
+        if [ -f "failed_games.json" ] && [ -s "failed_games.json" ]; then
+          echo "Retrying failed games..."
+          docker run --rm \
+            --name ncaa-scraper-retry \
+            --shm-size=2gb \
+            --memory=4g \
+            --memory-swap=4g \
+            -v $(pwd)/data:/app/data \
+            -v $(pwd)/logs:/app/logs \
+            -v $(pwd)/failed_games.json:/app/failed_games.json \
+            -v $(pwd)/.env:/app/.env \
+            -v $(pwd)/token.pickle:/app/token.pickle \
+            -e PYTHONUNBUFFERED=1 \
+            -e OUTPUT_DIR=/app/data \
+            -e DISPLAY=:99 \
+            -e CHROME_BIN=/usr/bin/google-chrome \
+            -e CHROME_PATH=/usr/bin/google-chrome \
+            -e DOCKER_CONTAINER=true \
+            -e WDM_LOG_LEVEL=0 \
+            -e WDM_LOCAL=1 \
+            -e UPLOAD_TO_GDRIVE=true \
+            ncaa-scraper:latest \
+            --retry-failed \
+            --failed-games-file /app/failed_games.json \
+            $DATE_ARG \
+            $FORCE_ARG
+        else
+          echo "No failed games file found or file is empty"
+          echo "Please ensure failed games artifacts from previous runs are available,"
+          echo "or manually upload a failed_games.json file as an artifact"
+          exit 1
+        fi
+        
+    - name: Upload retry logs
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: retry-only-logs-${{ github.run_number }}
         path: logs/
         retention-days: 7
         if-no-files-found: ignore
