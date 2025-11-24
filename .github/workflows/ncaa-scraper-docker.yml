@@ -1,9 +1,11 @@
 name: NCAA Basketball Scraper (Docker)
 
 on:
-  # Run daily at 6 AM UTC (adjust timezone as needed)
+  # Run daily at 10 AM UTC (scraping)
   schedule:
     - cron: '0 10 * * *'
+  # Run daily at 2 PM UTC (retry failed games 4 hours later)
+    - cron: '0 14 * * *'
   
   # Allow manual triggering
   workflow_dispatch:
@@ -35,10 +37,33 @@ env:
   UPLOAD_TO_GDRIVE: true
 
 jobs:
+  check-schedule-time:
+    runs-on: ubuntu-latest
+    outputs:
+      is_morning_run: ${{ steps.check.outputs.is_morning }}
+    steps:
+      - name: Check UTC hour
+        id: check
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            HOUR=$(date -u +%H)
+            if [ "$HOUR" -ge 10 ] && [ "$HOUR" -lt 14 ]; then
+              echo "is_morning=true" >> $GITHUB_OUTPUT
+            else
+              echo "is_morning=false" >> $GITHUB_OUTPUT
+            fi
+            echo "Current UTC hour: $HOUR"
+          else
+            # For workflow_dispatch, default to morning run (full scrape)
+            echo "is_morning=true" >> $GITHUB_OUTPUT
+            echo "Not a schedule event, defaulting to morning run"
+          fi
+
   discover-games:
     runs-on: ubuntu-latest
     timeout-minutes: 30  # Discovery should be fast
-    if: ${{ !github.event.inputs.retry_only }}
+    needs: check-schedule-time
+    if: ${{ !github.event.inputs.retry_only && (github.event_name != 'schedule' || needs.check-schedule-time.outputs.is_morning_run == 'true') }}
     
     steps:
     - name: Checkout code
@@ -125,10 +150,10 @@ jobs:
         docker container prune -f
 
   scrape:
-    needs: discover-games
+    needs: [discover-games, check-schedule-time]
     runs-on: ubuntu-latest
     timeout-minutes: 120  # Each job should be much shorter now
-    if: ${{ !github.event.inputs.retry_only }}
+    if: ${{ !github.event.inputs.retry_only && (github.event_name != 'schedule' || needs.check-schedule-time.outputs.is_morning_run == 'true') }}
     strategy:
       matrix:
         include:
@@ -268,10 +293,10 @@ jobs:
         docker container prune -f
 
   retry-failed:
-    needs: scrape
+    needs: [scrape, check-schedule-time]
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: always() && !github.event.inputs.retry_only  # Run even if scrape jobs fail, but not in retry-only mode
+    if: always() && !github.event.inputs.retry_only && (github.event_name != 'schedule' || needs.check-schedule-time.outputs.is_morning_run == 'true')  # Run even if scrape jobs fail, but not in retry-only mode or afternoon schedule
     
     steps:
     - name: Checkout code
@@ -435,7 +460,8 @@ jobs:
   retry-only:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    if: github.event.inputs.retry_only == 'true'  # Only run when retry_only is enabled
+    needs: check-schedule-time
+    if: github.event.inputs.retry_only == 'true' || (github.event_name == 'schedule' && needs.check-schedule-time.outputs.is_morning_run == 'false')  # Run when retry_only is enabled OR on afternoon scheduled run (14:00 UTC)
     
     steps:
     - name: Checkout code
