@@ -486,9 +486,8 @@ jobs:
       with:
         github-token: ${{ secrets.GH_TOKEN }}
         script: |
-          // Set GH_TOKEN environment variable for curl to use
-          // github-script automatically sets GITHUB_TOKEN from github-token parameter
-          process.env.GH_TOKEN = process.env.GITHUB_TOKEN;
+          // Get token from secret directly (most reliable)
+          const ghToken = '${{ secrets.GH_TOKEN }}';
           
           const fs = require('fs');
           const path = require('path');
@@ -550,7 +549,7 @@ jobs:
             try {
               // Use curl to download (handles redirects automatically with -L flag)
               const { execSync } = require('child_process');
-              execSync(`curl -L -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${process.env.GH_TOKEN}" -H "X-GitHub-Api-Version: 2022-11-28" -o "${zipPath}" "${downloadUrl}"`);
+              execSync(`curl -L -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${ghToken}" -H "X-GitHub-Api-Version: 2022-11-28" -o "${zipPath}" "${downloadUrl}"`);
               
               // Extract using unzip
               execSync(`unzip -q -o "${zipPath}" -d "${downloadDir}/${artifact.name}"`);
