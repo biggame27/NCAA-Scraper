@@ -164,3 +164,71 @@ class CSVHandler:
         except Exception as e:
             logger.error(f"Error updating duplicate flag in {csv_path}: {e}")
             return False
+    
+    def merge_csv_files(self, existing_csv_path: str, new_csv_path: str, output_path: str) -> bool:
+        """
+        Merge two CSV files, avoiding duplicate games.
+        
+        Args:
+            existing_csv_path: Path to the existing CSV file (from Google Drive)
+            new_csv_path: Path to the new CSV file (with retried games)
+            output_path: Path to save the merged CSV file
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Read both CSV files
+            existing_df = self.read_csv_safely(existing_csv_path)
+            new_df = self.read_csv_safely(new_csv_path)
+            
+            if existing_df is None:
+                logger.warning(f"Existing CSV {existing_csv_path} not found or empty, using new CSV only")
+                if new_df is not None:
+                    new_df.to_csv(output_path, index=False)
+                    return True
+                return False
+            
+            if new_df is None or new_df.empty:
+                logger.info(f"New CSV {new_csv_path} is empty, keeping existing CSV")
+                existing_df.to_csv(output_path, index=False)
+                return True
+            
+            # Get existing game IDs to avoid duplicates
+            existing_game_ids = set()
+            if 'GAMEID' in existing_df.columns:
+                existing_game_ids = set(existing_df['GAMEID'].values)
+            
+            # Filter out games that already exist
+            if 'GAMEID' in new_df.columns:
+                new_df_filtered = new_df[~new_df['GAMEID'].isin(existing_game_ids)].copy()
+            else:
+                # If no GAMEID column, use GAMELINK as fallback
+                existing_game_links = set()
+                if 'GAMELINK' in existing_df.columns:
+                    existing_game_links = set(existing_df['GAMELINK'].values)
+                
+                if 'GAMELINK' in new_df.columns:
+                    new_df_filtered = new_df[~new_df['GAMELINK'].isin(existing_game_links)].copy()
+                else:
+                    # No way to deduplicate, append all
+                    logger.warning("No GAMEID or GAMELINK column found, appending all rows (may create duplicates)")
+                    new_df_filtered = new_df.copy()
+            
+            if new_df_filtered.empty:
+                logger.info("No new games to add, existing CSV is up to date")
+                existing_df.to_csv(output_path, index=False)
+                return True
+            
+            # Merge the dataframes
+            merged_df = pd.concat([existing_df, new_df_filtered], ignore_index=True)
+            
+            # Save merged CSV
+            merged_df.to_csv(output_path, index=False)
+            
+            logger.info(f"Merged CSV files: {len(existing_df)} existing rows + {len(new_df_filtered)} new rows = {len(merged_df)} total rows")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error merging CSV files: {e}")
+            return False

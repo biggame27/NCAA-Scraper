@@ -2,6 +2,8 @@
 
 import argparse
 import logging
+import os
+import shutil
 from datetime import date
 from typing import List
 
@@ -380,6 +382,19 @@ def _scrape_games_from_mapping(
     
     csv_path = scraper.file_manager.get_csv_path(year, month, day, gender, division)
     
+    # If retrying, download existing CSV from Google Drive and merge
+    existing_csv_path = None
+    if is_retry and scraper.config.upload_to_gdrive:
+        logger.info(f"Retry mode: Checking for existing CSV in Google Drive for {division} {gender}")
+        existing_csv_path = csv_path + ".existing"
+        
+        # Download existing file from Google Drive
+        if scraper.google_drive.download_file_from_gdrive(year, month, gender, division, day, existing_csv_path):
+            logger.info(f"Downloaded existing CSV from Google Drive: {existing_csv_path}")
+        else:
+            logger.info("No existing CSV found in Google Drive, will create new file")
+            existing_csv_path = None
+    
     logger.info(f"Scraping {len(game_links)} games for {division} {gender}")
     
     # Initialize driver
@@ -502,6 +517,24 @@ def _scrape_games_from_mapping(
                 continue
         
         logger.info(f"Scraped {scraped_count}/{len(game_links)} games successfully ({failed_count} failed)")
+        
+        # If retrying and we downloaded an existing CSV, merge them
+        if is_retry and existing_csv_path and os.path.exists(existing_csv_path):
+            logger.info(f"Merging existing CSV with new data for {division} {gender}")
+            merged_csv_path = csv_path + ".merged"
+            
+            if scraper.csv_handler.merge_csv_files(existing_csv_path, csv_path, merged_csv_path):
+                # Replace the new CSV with the merged one
+                shutil.move(merged_csv_path, csv_path)
+                logger.info(f"Successfully merged CSV files for {division} {gender}")
+                
+                # Clean up the downloaded existing CSV
+                try:
+                    os.remove(existing_csv_path)
+                except Exception as e:
+                    logger.warning(f"Failed to remove temporary existing CSV: {e}")
+            else:
+                logger.warning(f"Failed to merge CSV files, uploading new CSV only")
         
         # Upload to Google Drive if enabled
         if scraper.config.upload_to_gdrive and scraper.file_manager.file_exists_and_has_content(csv_path):

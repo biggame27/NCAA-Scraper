@@ -504,3 +504,69 @@ class GoogleDriveManager:
         except Exception as e:
             logger.error(f"Failed to check Google Drive for existing files: {e}")
             return False, None
+    
+    def download_file_from_gdrive(self, year: str, month: str, gender: str, division: str, day: str, local_path: str) -> bool:
+        """
+        Download a file from Google Drive to local path.
+        
+        Args:
+            year: Year (e.g., "2025")
+            month: Month (e.g., "02")
+            gender: Gender (e.g., "women")
+            division: Division (e.g., "d3")
+            day: Day (e.g., "06")
+            local_path: Local file path to save the downloaded file to
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if not self.service:
+                if not self.authenticate():
+                    return False
+            
+            # Create folder structure to get the target folder ID
+            folder_id = self.create_folder_structure(
+                year, month, gender, division, self.config.google_drive_folder_id
+            )
+            
+            if not folder_id:
+                logger.warning(f"Could not find/create folder structure for {year}/{month}/{gender}/{division}")
+                return False
+            
+            # Find the file
+            file_name = os.path.basename(local_path)
+            file_id = self.file_exists(file_name, folder_id)
+            
+            if not file_id:
+                logger.info(f"File {file_name} does not exist in Google Drive, skipping download")
+                return False
+            
+            # Download the file
+            request = self.service.files().get_media(fileId=file_id)
+            
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(local_path) if os.path.dirname(local_path) else '.', exist_ok=True)
+            
+            from googleapiclient.http import MediaIoBaseDownload
+            import io
+            
+            # Use BytesIO buffer for download
+            fh = io.BytesIO()
+            downloader = MediaIoBaseDownload(fh, request)
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+                if status:
+                    logger.debug(f"Download progress: {int(status.progress() * 100)}%")
+            
+            # Write to file
+            with open(local_path, 'wb') as f:
+                f.write(fh.getvalue())
+            
+            logger.info(f"Successfully downloaded {file_name} from Google Drive to {local_path}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to download file from Google Drive: {e}")
+            return False
