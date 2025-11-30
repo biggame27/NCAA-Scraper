@@ -7,6 +7,7 @@ from typing import Dict, List, Set
 from pathlib import Path
 
 from .config import get_config, Division, Gender
+from .config.constants import ErrorType
 from .scrapers import NCAAScraper
 from .scrapers.selenium_utils import SeleniumUtils
 from .utils import format_date_for_url, generate_ncaa_urls, parse_url_components
@@ -71,7 +72,15 @@ def discover_games(
                 game_links = scraper._extract_game_links(url)
                 
                 if not game_links:
-                    logger.warning(f"No game links found for {url}")
+                    no_links_msg = f"No game links found for {url}"
+                    logger.warning(no_links_msg)
+                    scraper.send_notification(
+                        no_links_msg,
+                        ErrorType.WARNING,
+                        division=division,
+                        date=f"{components['year']}-{components['month']}-{components['day']}",
+                        gender=gender
+                    )
                     continue
                 
                 logger.info(f"Found {len(game_links)} game links for {division} {gender}")

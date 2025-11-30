@@ -96,7 +96,7 @@ class NCAAScraper(BaseScraper):
                     self.logger.warning(no_links_msg)
                     self.send_notification(
                         no_links_msg,
-                        ErrorType.INFO,
+                        ErrorType.WARNING,
                         division=division,
                         date=f"{year}-{month}-{day}",
                         gender=gender
