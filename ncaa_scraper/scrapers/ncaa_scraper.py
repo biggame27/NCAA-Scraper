@@ -876,6 +876,22 @@ class NCAAScraper(BaseScraper):
                 team_name = team1_name if table_idx == 0 else team2_name
                 opponent_name = team2_name if table_idx == 0 else team1_name
                 
+                # Detect if FG% column exists by checking the table header
+                has_fg_percent = False
+                thead = table.find('thead')
+                if thead:
+                    header_row = thead.find('tr')
+                    if header_row:
+                        header_cells = header_row.find_all(['th', 'td'])
+                        for cell in header_cells:
+                            header_text = cell.get_text(strip=True).upper()
+                            if 'FG%' in header_text or 'FG %' in header_text:
+                                has_fg_percent = True
+                                break
+                
+                # Calculate offset: if FG% exists, we need to skip cells[6]
+                fg_offset = 1 if has_fg_percent else 0
+                
                 # Find all player rows
                 tbody = table.find('tbody')
                 if not tbody:
@@ -894,7 +910,9 @@ class NCAAScraper(BaseScraper):
                             continue
                         
                         cells = row.find_all('td')
-                        if len(cells) < 21:
+                        # Minimum cells: 20 without FG%, 21 with FG%
+                        min_cells = 20 + fg_offset
+                        if len(cells) < min_cells:
                             continue
                         
                         # Extract player data (same as altscraper.py)
@@ -919,26 +937,27 @@ class NCAAScraper(BaseScraper):
                         
                         fgm = cells[4].get_text(strip=True) if len(cells) > 4 else '0'
                         fga = cells[5].get_text(strip=True) if len(cells) > 5 else '0'
-                        # Skip cells[6] which is FG% (field goal percentage)
+                        # Skip cells[6] if FG% column exists (it will be at index 6)
                         fgm_a = f"{fgm}-{fga}"
                         
-                        fg3m = cells[7].get_text(strip=True) if len(cells) > 7 else '0'
-                        fg3a = cells[8].get_text(strip=True) if len(cells) > 8 else '0'
+                        # Adjust indices based on whether FG% column exists
+                        fg3m = cells[6 + fg_offset].get_text(strip=True) if len(cells) > 6 + fg_offset else '0'
+                        fg3a = cells[7 + fg_offset].get_text(strip=True) if len(cells) > 7 + fg_offset else '0'
                         fg3m_a = f"{fg3m}-{fg3a}"
                         
-                        ftm = cells[9].get_text(strip=True) if len(cells) > 9 else '0'
-                        fta = cells[10].get_text(strip=True) if len(cells) > 10 else '0'
+                        ftm = cells[8 + fg_offset].get_text(strip=True) if len(cells) > 8 + fg_offset else '0'
+                        fta = cells[9 + fg_offset].get_text(strip=True) if len(cells) > 9 + fg_offset else '0'
                         ftm_a = f"{ftm}-{fta}"
                         
-                        pts = cells[11].get_text(strip=True) if len(cells) > 11 else '0'
-                        oreb = cells[12].get_text(strip=True) if len(cells) > 12 else '0'
-                        dreb = cells[13].get_text(strip=True) if len(cells) > 13 else '0'
-                        reb = cells[14].get_text(strip=True) if len(cells) > 14 else '0'
-                        ast = cells[15].get_text(strip=True) if len(cells) > 15 else '0'
-                        to = cells[16].get_text(strip=True) if len(cells) > 16 else '0'
-                        stl = cells[17].get_text(strip=True) if len(cells) > 17 else '0'
-                        blk = cells[18].get_text(strip=True) if len(cells) > 18 else '0'
-                        pf = cells[19].get_text(strip=True) if len(cells) > 19 else '0'
+                        pts = cells[10 + fg_offset].get_text(strip=True) if len(cells) > 10 + fg_offset else '0'
+                        oreb = cells[11 + fg_offset].get_text(strip=True) if len(cells) > 11 + fg_offset else '0'
+                        dreb = cells[12 + fg_offset].get_text(strip=True) if len(cells) > 12 + fg_offset else '0'
+                        reb = cells[13 + fg_offset].get_text(strip=True) if len(cells) > 13 + fg_offset else '0'
+                        ast = cells[14 + fg_offset].get_text(strip=True) if len(cells) > 14 + fg_offset else '0'
+                        to = cells[15 + fg_offset].get_text(strip=True) if len(cells) > 15 + fg_offset else '0'
+                        stl = cells[16 + fg_offset].get_text(strip=True) if len(cells) > 16 + fg_offset else '0'
+                        blk = cells[17 + fg_offset].get_text(strip=True) if len(cells) > 17 + fg_offset else '0'
+                        pf = cells[18 + fg_offset].get_text(strip=True) if len(cells) > 18 + fg_offset else '0'
                         
                         # Create player record as DataFrame row
                         player_dict = {
