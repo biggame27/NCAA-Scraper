@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 def generate_ncaa_urls(
     date_str: str,
     divisions: List[Division] = None,
-    genders: List[Gender] = None
+    genders: List[Gender] = None,
+    season_division_id: str = None
 ) -> List[str]:
     """
     Generate stats.ncaa.org scoreboard URLs for given date and parameters.
@@ -22,6 +23,7 @@ def generate_ncaa_urls(
         date_str: Date in YYYY/MM/DD format (will be converted to MM/DD/YYYY)
         divisions: List of divisions to scrape
         genders: List of genders to scrape
+        season_division_id: Optional NCAA season division ID (e.g., 17763)
     
     Returns:
         List of stats.ncaa.org scoreboard URLs
@@ -58,7 +60,14 @@ def generate_ncaa_urls(
                 'game_date': game_date,
                 'commit': 'Submit'
             }
-            url = f"{NCAA_BASE_URL}?{urlencode(params)}"
+            if season_division_id:
+                # Historical seasons often require season-specific scoreboard endpoints.
+                params['season_division_id'] = ''
+                params['conference_id'] = '0'
+                params['tournament_id'] = ''
+                url = f"https://stats.ncaa.org/season_divisions/{season_division_id}/livestream_scoreboards?{urlencode(params)}"
+            else:
+                url = f"{NCAA_BASE_URL}?{urlencode(params)}"
             urls.append(url)
     
     return urls

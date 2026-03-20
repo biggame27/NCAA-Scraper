@@ -45,6 +45,7 @@ def main():
     parser.add_argument('--test-game-gender', type=str, choices=['men', 'women'], default='men', help='Gender for test game (default: men)')
     parser.add_argument('--retry-failed', action='store_true', help='Retry scraping failed games from previous runs')
     parser.add_argument('--failed-games-file', type=str, default='failed_games.json', help='Path to failed games JSON file')
+    parser.add_argument('--season-division-id', type=str, help='Optional NCAA season division ID for historical season scoreboards (e.g., 17763)')
     
     args = parser.parse_args()
     
@@ -147,7 +148,13 @@ def main():
         target_date = _parse_date(args.date) if args.date else get_yesterday()
         logger.info(f"Discovery mode: extracting game links for {target_date}")
         try:
-            mapping = discover_games(target_date, "discovery/game_links_mapping.json")
+            mapping = discover_games(
+                target_date,
+                "discovery/game_links_mapping.json",
+                season_division_id=args.season_division_id,
+                divisions=divisions,
+                genders=genders
+            )
             logger.info(f"Discovery completed successfully. Found {mapping['total_games']} games.")
             return 0
         except Exception as e:
@@ -232,7 +239,14 @@ def main():
             
             # Scrape games
             from .utils import parse_url_components
-            components = parse_url_components(generate_ncaa_urls(format_date_for_url(target_date), [Division(args.single_division)], [Gender(args.single_gender)])[0])
+            components = parse_url_components(
+                generate_ncaa_urls(
+                    format_date_for_url(target_date),
+                    [Division(args.single_division)],
+                    [Gender(args.single_gender)],
+                    season_division_id=args.season_division_id
+                )[0]
+            )
             
             _scrape_games_from_mapping(
                 scraper,
@@ -316,7 +330,12 @@ def _run_scraping_session(scraper: NCAAScraper, scraping_config: ScrapingConfig)
     
     while current_date <= end_date:
         date_str = format_date_for_url(current_date)
-        urls = generate_ncaa_urls(date_str, scraping_config.divisions, scraping_config.genders)
+        urls = generate_ncaa_urls(
+            date_str,
+            scraping_config.divisions,
+            scraping_config.genders,
+            season_division_id=getattr(scraping_config, 'season_division_id', None)
+        )
         all_urls.extend(urls)
         current_date += timedelta(days=1)
     

@@ -11,9 +11,15 @@ on:
   workflow_dispatch:
     inputs:
       date:
-        description: 'Date to scrape (YYYY/MM/DD format, leave empty for yesterday)'
+        description: 'Date to scrape (YYYY/MM/DD format, e.g. 2021/11/09)'
         required: false
         type: string
+        default: '2021/11/09'
+      season_division_id:
+        description: 'NCAA season division ID (Women D1 2021-2022 = 17763)'
+        required: false
+        type: string
+        default: '17763'
       force_rescrape:
         description: 'Force rescrape and override existing Google Drive files'
         required: false
@@ -24,16 +30,6 @@ on:
         required: false
         default: false
         type: boolean
-      divisions:
-        description: 'Comma-separated divisions to scrape (d1,d2,d3). Leave empty for all.'
-        required: false
-        type: string
-        default: 'd1,d2,d3'
-      genders:
-        description: 'Comma-separated genders to scrape (men,women). Leave empty for all.'
-        required: false
-        type: string
-        default: 'men,women'
 
 env:
   PYTHONUNBUFFERED: 1
@@ -79,40 +75,8 @@ jobs:
       - name: Generate matrix
         id: set-matrix
         run: |
-          # Parse divisions input
-          if [ -n "${{ github.event.inputs.divisions }}" ]; then
-            DIVISIONS="${{ github.event.inputs.divisions }}"
-          else
-            DIVISIONS="d1,d2,d3"
-          fi
-          
-          # Parse genders input
-          if [ -n "${{ github.event.inputs.genders }}" ]; then
-            GENDERS="${{ github.event.inputs.genders }}"
-          else
-            GENDERS="men,women"
-          fi
-          
-          # Convert comma-separated to arrays
-          IFS=',' read -ra DIV_ARRAY <<< "$DIVISIONS"
-          IFS=',' read -ra GEN_ARRAY <<< "$GENDERS"
-          
-          # Build matrix JSON
-          MATRIX_JSON="["
-          FIRST=true
-          for div in "${DIV_ARRAY[@]}"; do
-            div=$(echo "$div" | xargs)  # trim whitespace
-            for gen in "${GEN_ARRAY[@]}"; do
-              gen=$(echo "$gen" | xargs)  # trim whitespace
-              if [ "$FIRST" = true ]; then
-                FIRST=false
-              else
-                MATRIX_JSON+=","
-              fi
-              MATRIX_JSON+="{\"division\":\"$div\",\"gender\":\"$gen\"}"
-            done
-          done
-          MATRIX_JSON+="]"
+          # Locked scope: Women's D1 only
+          MATRIX_JSON='[{"division":"d1","gender":"women"}]'
           
           echo "matrix=$MATRIX_JSON" >> $GITHUB_OUTPUT
           echo "Generated matrix: $MATRIX_JSON"
@@ -191,7 +155,10 @@ jobs:
           -e WDM_LOCAL=1 \
           -e UPLOAD_TO_GDRIVE=true \
           ncaa-scraper:latest \
-          --discover $DATE_ARG
+          --discover $DATE_ARG \
+          --divisions d1 \
+          --genders women \
+          --season-division-id "${{ github.event.inputs.season_division_id || '17763' }}"
         
     - name: Upload discovery mapping
       uses: actions/upload-artifact@v4
@@ -304,6 +271,7 @@ jobs:
           --single-gender ${{ matrix.gender }} \
           --mapping-file /app/discovery/game_links_mapping.json \
           --failed-games-file /app/failed_games.json \
+          --season-division-id "${{ github.event.inputs.season_division_id || '17763' }}" \
           $DATE_ARG \
           $FORCE_ARG
         

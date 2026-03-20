@@ -18,7 +18,10 @@ logger = logging.getLogger(__name__)
 
 def discover_games(
     target_date: date,
-    output_file: str = "discovery/game_links_mapping.json"
+    output_file: str = "discovery/game_links_mapping.json",
+    season_division_id: str = None,
+    divisions: List[Division] = None,
+    genders: List[Gender] = None
 ) -> Dict:
     """
     Discover all game links from all divisions and genders for a given date.
@@ -27,6 +30,9 @@ def discover_games(
     Args:
         target_date: Date to discover games for
         output_file: Path to save the mapping JSON file
+        season_division_id: Optional NCAA season division ID (e.g., 17763)
+        divisions: Optional divisions to include
+        genders: Optional genders to include
         
     Returns:
         Dictionary mapping game links to their divisions
@@ -36,10 +42,10 @@ def discover_games(
     
     # Generate all URLs for the date
     date_str = format_date_for_url(target_date)
-    all_divisions = [Division.D1, Division.D2, Division.D3]
-    all_genders = [Gender.MEN, Gender.WOMEN]
+    all_divisions = divisions if divisions is not None else [Division.D1, Division.D2, Division.D3]
+    all_genders = genders if genders is not None else [Gender.MEN, Gender.WOMEN]
     
-    urls = generate_ncaa_urls(date_str, all_divisions, all_genders)
+    urls = generate_ncaa_urls(date_str, all_divisions, all_genders, season_division_id=season_division_id)
     logger.info(f"Discovering games for {target_date}: {len(urls)} scoreboard URLs")
     
     # Map to store game_link -> list of (division, gender) tuples
